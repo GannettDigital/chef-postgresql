@@ -15,7 +15,9 @@
 # limitations under the License.
 #
 
-::Chef::Recipe.send(:include, Opscode::OpenSSL::Password)
+include_recipe "postgresql::ca_certificates"
+
+::Chef::Recipe.send(:include, OpenSSLCookbook::RandomPassword)
 
 include_recipe "postgresql::client"
 
@@ -28,10 +30,11 @@ if Chef::Config[:solo]
   end.map { |attr| "node['postgresql']['password']['#{attr}']" }
 
   if !missing_attrs.empty?
-    Chef::Application.fatal!([
+    Chef::Log.fatal([
         "You must set #{missing_attrs.join(', ')} in chef-solo mode.",
         "For more information, see https://github.com/opscode-cookbooks/postgresql#chef-solo-note"
       ].join(' '))
+    raise
   end
 else
   # TODO: The "secure_password" is randomly generated plain text, so it
@@ -40,35 +43,39 @@ else
   # login for user 'postgres'). However, a random password wouldn't be
   # useful if it weren't saved as clear text in Chef Server for later
   # retrieval.
-  node.set_unless['postgresql']['password']['postgres'] = secure_password
-  node.save
+  unless node.key?('postgresql') && node['postgresql'].key?('password') && node['postgresql']['password'].key?('postgres')
+    node.set_unless['postgresql']['password']['postgres'] = random_password(length: 20, mode: :base64)
+    node.save
+  end
 end
 
 # Include the right "family" recipe for installing the server
 # since they do things slightly differently.
 case node['platform_family']
-when "rhel", "fedora", "suse"
+when "rhel", "fedora"
+  node.set['postgresql']['dir'] = "/var/lib/pgsql/#{node['postgresql']['version']}/data"
+  node.set['postgresql']['config']['data_directory'] = "/var/lib/pgsql/#{node['postgresql']['version']}/data"
   include_recipe "postgresql::server_redhat"
 when "debian"
+  node.set['postgresql']['config']['data_directory'] = "/var/lib/postgresql/#{node['postgresql']['version']}/main"
   include_recipe "postgresql::server_debian"
+when 'suse'
+  node.set['postgresql']['config']['data_directory'] = node['postgresql']['dir']
+  include_recipe "postgresql::server_redhat"
 end
 
-change_notify = node['postgresql']['server']['config_change_notify']
-
-template "#{node['postgresql']['dir']}/postgresql.conf" do
-  source "postgresql.conf.erb"
-  owner "postgres"
-  group "postgres"
-  mode 0600
-  notifies change_notify, 'service[postgresql]', :immediately
+# Versions prior to 9.2 do not have a config file option to set the SSL
+# key and cert path, and instead expect them to be in a specific location.
+if node['postgresql']['version'].to_f < 9.2 && node['postgresql']['config'].attribute?('ssl_cert_file')
+  link ::File.join(node['postgresql']['config']['data_directory'], 'server.crt') do
+    to node['postgresql']['config']['ssl_cert_file']
+  end
 end
 
-template "#{node['postgresql']['dir']}/pg_hba.conf" do
-  source "pg_hba.conf.erb"
-  owner "postgres"
-  group "postgres"
-  mode 00600
-  notifies change_notify, 'service[postgresql]', :immediately
+if node['postgresql']['version'].to_f < 9.2 && node['postgresql']['config'].attribute?('ssl_key_file')
+  link ::File.join(node['postgresql']['config']['data_directory'], 'server.key') do
+    to node['postgresql']['config']['ssl_key_file']
+  end
 end
 
 # NOTE: Consider two facts before modifying "assign-postgres-password":
@@ -82,8 +89,9 @@ end
 bash "assign-postgres-password" do
   user 'postgres'
   code <<-EOH
-echo "ALTER ROLE postgres ENCRYPTED PASSWORD '#{node['postgresql']['password']['postgres']}';" | psql -p #{node['postgresql']['config']['port']}
+  echo "ALTER ROLE postgres ENCRYPTED PASSWORD \'#{node['postgresql']['password']['postgres']}\';" | psql -p #{node['postgresql']['config']['port']}
   EOH
   action :run
+  not_if "ls #{node['postgresql']['config']['data_directory']}/recovery.conf"
   only_if { node['postgresql']['assign_postgres_password'] }
 end

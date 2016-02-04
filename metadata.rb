@@ -1,10 +1,10 @@
 name              "postgresql"
 maintainer        "Heavy Water Operations, LLC"
-maintainer_email  "support@hw-ops.com"
+maintainer_email  "helpdesk@heavywater.io"
 license           "Apache 2.0"
 description       "Installs and configures postgresql for clients or servers"
 long_description  IO.read(File.join(File.dirname(__FILE__), 'README.md'))
-version           "3.4.10"
+version           "4.0.0"
 recipe            "postgresql", "Includes postgresql::client"
 recipe            "postgresql::ruby", "Installs pg gem for Ruby bindings"
 recipe            "postgresql::client", "Installs postgresql client package(s)"
@@ -13,9 +13,9 @@ recipe            "postgresql::server_redhat", "Installs postgresql server packa
 recipe            "postgresql::server_debian", "Installs postgresql server packages, debian family style"
 
 
-supports "ubuntu", "< 14.04"
+supports "ubuntu", "< 14.10"
 
-%w{debian fedora suse amazon}.each do |os|
+%w{debian fedora suse opensuse amazon}.each do |os|
   supports os
 end
 
@@ -25,4 +25,4 @@ end
 
 depends "apt", ">= 1.9.0"
 depends "build-essential"
-depends "openssl"
+depends "openssl", "~> 4.0"
